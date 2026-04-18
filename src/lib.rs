@@ -8,6 +8,7 @@ pub use core::config::{MapConfig, MapShape};
 pub use core::error::HexMapError;
 pub use core::tile::{TerrainKind, TileData};
 pub use ops::landmass::LandRaiseSinkOp;
+pub use ops::tectonic::TectonicPlateOp;
 pub use ops::voronoi::VoronoiPartitionOp;
 pub use pipeline::builder::PipelineBuilder;
 pub use pipeline::pipeline::Pipeline;
@@ -27,6 +28,7 @@ mod tests {
         let map = PipelineBuilder::new()
             .voronoi(4)
             .land_raise_sink(50, 2, 2)
+            .tectonic_plates(2, 1, 1)
             .run(config, 7)
             .expect("pipeline should run");
 
