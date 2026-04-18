@@ -1,16 +1,19 @@
-use hex_grid::Orientation;
+use hex_grid::{Orientation, WrappingMode};
 use hex_map::{HexMapError, MapConfig, PipelineBuilder};
 
 #[test]
-fn tectonic_requires_voronoi_assignments() {
+fn tectonic_requires_valid_plate_count() {
     let config = MapConfig::rectangular(8, 6, Orientation::FlatTop, None).expect("valid config");
 
-    let err = match PipelineBuilder::new().tectonic_plates(2, 2, 1).run(config, 77) {
-        Ok(_) => panic!("tectonic without Voronoi must fail"),
+    let err = match PipelineBuilder::new()
+        .tectonic_plates(0, 2, 2, 1)
+        .run(config, 77)
+    {
+        Ok(_) => panic!("tectonic with zero plate count must fail"),
         Err(err) => err,
     };
 
-    assert_eq!(err, HexMapError::TectonicRequiresCellAssignments);
+    assert_eq!(err, HexMapError::InvalidTectonicPlateCount);
 }
 
 #[test]
@@ -18,9 +21,8 @@ fn tectonic_is_deterministic_for_same_seed() {
     let config = MapConfig::rectangular(9, 7, Orientation::PointyTop, None).expect("valid config");
 
     let pipeline = PipelineBuilder::new()
-        .voronoi(7)
         .land_raise_sink(58, 3, 2)
-        .tectonic_plates(3, 2, 1)
+        .tectonic_plates(7, 3, 2, 1)
         .build();
 
     let map_a = pipeline.run(config, 4242).expect("first run should succeed");
@@ -50,9 +52,8 @@ fn tectonic_changes_elevation_distribution() {
         .expect("base pipeline should run");
 
     let tectonic_map = PipelineBuilder::new()
-        .voronoi(8)
         .land_raise_sink(55, 3, 3)
-        .tectonic_plates(3, 3, 1)
+        .tectonic_plates(8, 3, 3, 1)
         .run(
             MapConfig::rectangular(10, 8, Orientation::FlatTop, None).expect("valid config"),
             2026,
@@ -70,4 +71,23 @@ fn tectonic_changes_elevation_distribution() {
         .count();
 
     assert!(changed_tiles > 0, "tectonic step should alter some elevations");
+}
+
+#[test]
+fn tectonic_runs_with_wrapping_enabled() {
+    let config = MapConfig::rectangular(
+        10,
+        8,
+        Orientation::FlatTop,
+        Some(WrappingMode::Toroidal),
+    )
+    .expect("valid config");
+
+    let map = PipelineBuilder::new()
+        .land_raise_sink(55, 3, 3)
+        .tectonic_plates(8, 3, 3, 1)
+        .run(config, 2026)
+        .expect("tectonic pipeline should run with wrapping");
+
+    assert!(map.len() > 0);
 }

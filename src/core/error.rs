@@ -6,7 +6,7 @@ pub enum HexMapError {
     InvalidDimensions,
     EmptyPipeline,
     InvalidVoronoiRegionCount,
-    TectonicRequiresCellAssignments,
+    InvalidTectonicPlateCount,
 }
 
 impl Display for HexMapError {
@@ -17,8 +17,8 @@ impl Display for HexMapError {
             Self::InvalidVoronoiRegionCount => {
                 write!(f, "voronoi region count must be between 1 and map tile count")
             }
-            Self::TectonicRequiresCellAssignments => {
-                write!(f, "tectonic operation requires all tiles to have Voronoi cell assignments")
+            Self::InvalidTectonicPlateCount => {
+                write!(f, "tectonic plate count must be between 1 and map tile count")
             }
         }
     }

@@ -8,18 +8,30 @@ use crate::pipeline::operation::GeneratorOperation;
 use crate::util::rng::SeededRng;
 
 pub struct TectonicPlateOp {
+    plate_count: usize,
     max_boundary_raise: i32,
     max_boundary_sink: i32,
     interior_jitter: i32,
 }
 
 impl TectonicPlateOp {
-    pub fn new(max_boundary_raise: i32, max_boundary_sink: i32, interior_jitter: i32) -> Self {
+    pub fn new(
+        plate_count: usize,
+        max_boundary_raise: i32,
+        max_boundary_sink: i32,
+        interior_jitter: i32,
+    ) -> Self {
         Self {
+            plate_count,
             max_boundary_raise: max_boundary_raise.max(0),
             max_boundary_sink: max_boundary_sink.max(0),
             interior_jitter: interior_jitter.max(0),
         }
+    }
+
+    fn choose_centers(&self, coords: &mut [CubeCoord], rng: &mut SeededRng) -> Vec<CubeCoord> {
+        rng.shuffle(coords);
+        coords[..self.plate_count].to_vec()
     }
 }
 
@@ -29,52 +41,62 @@ impl GeneratorOperation for TectonicPlateOp {
     }
 
     fn apply(&self, map: &mut HexGrid<TileData>, rng: &mut SeededRng) -> Result<(), HexMapError> {
-        let coords: Vec<CubeCoord> = map.iter().map(|(coord, _)| coord).collect();
+        let mut coords: Vec<CubeCoord> = map.iter().map(|(coord, _)| coord).collect();
 
-        let coord_cell_pairs: Vec<(CubeCoord, u32)> = coords
-            .iter()
-            .map(|coord| {
-                map.get(*coord)
-                    .and_then(|tile| tile.cell_id)
-                    .map(|cell_id| (*coord, cell_id))
-            })
-            .collect::<Option<Vec<(CubeCoord, u32)>>>()
-            .ok_or(HexMapError::TectonicRequiresCellAssignments)?;
-
-        let mut unique_cells: Vec<u32> = coord_cell_pairs.iter().map(|(_, cell_id)| *cell_id).collect();
-        unique_cells.sort_unstable();
-        unique_cells.dedup();
-
-        let mut drift: HashMap<u32, bool> = HashMap::new();
-        for cell_id in unique_cells {
-            drift.insert(cell_id, rng.next_bool_ratio(1, 2));
+        if self.plate_count == 0 || self.plate_count > coords.len() {
+            return Err(HexMapError::InvalidTectonicPlateCount);
         }
 
-        for (coord, current_cell) in &coord_cell_pairs {
-            let mut neighbor_cells: Vec<u32> = Vec::new();
+        let centers = self.choose_centers(&mut coords, rng);
+        let all_coords: Vec<CubeCoord> = map.iter().map(|(coord, _)| coord).collect();
+        let coord_plate_pairs: Vec<(CubeCoord, u32)> = all_coords
+            .iter()
+            .map(|coord| {
+                let mut best_id = 0usize;
+                let mut best_distance = i32::MAX;
 
-            for (other_coord, other_cell) in &coord_cell_pairs {
-                if current_cell == other_cell {
+                for (idx, center) in centers.iter().enumerate() {
+                    let distance = map.wrapped_distance(*coord, *center);
+                    if distance < best_distance || (distance == best_distance && idx < best_id) {
+                        best_distance = distance;
+                        best_id = idx;
+                    }
+                }
+
+                (*coord, best_id as u32)
+            })
+            .collect();
+
+        let mut drift: HashMap<u32, bool> = HashMap::new();
+        for plate_id in 0..self.plate_count {
+            drift.insert(plate_id as u32, rng.next_bool_ratio(1, 2));
+        }
+
+        for (coord, current_plate) in &coord_plate_pairs {
+            let mut neighbor_plates: Vec<u32> = Vec::new();
+
+            for (other_coord, other_plate) in &coord_plate_pairs {
+                if current_plate == other_plate {
                     continue;
                 }
 
                 if map.wrapped_distance(*coord, *other_coord) == 1 {
-                    neighbor_cells.push(*other_cell);
+                    neighbor_plates.push(*other_plate);
                 }
             }
 
             let mut delta = 0;
 
-            if !neighbor_cells.is_empty() {
-                let current_drift = *drift.get(current_cell).unwrap_or(&false);
-                let opposite_count = neighbor_cells
+            if !neighbor_plates.is_empty() {
+                let current_drift = *drift.get(current_plate).unwrap_or(&false);
+                let opposite_count = neighbor_plates
                     .iter()
-                    .filter(|neighbor_cell| {
-                        drift.get(neighbor_cell).copied().unwrap_or(false) != current_drift
+                    .filter(|neighbor_plate| {
+                        drift.get(neighbor_plate).copied().unwrap_or(false) != current_drift
                     })
                     .count();
 
-                if opposite_count * 2 >= neighbor_cells.len() {
+                if opposite_count * 2 >= neighbor_plates.len() {
                     if self.max_boundary_raise > 0 {
                         delta += rng.next_i32_inclusive(1, self.max_boundary_raise);
                     }
