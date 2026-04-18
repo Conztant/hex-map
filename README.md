@@ -33,7 +33,7 @@ let config = MapConfig::rectangular(
 let map = PipelineBuilder::new()
     .voronoi(12)
     .land_raise_sink(60, 4, 3)
-    .tectonic_plates(12, 2, 2, 1)
+    .tectonic_plates(12, 2, 2, 2, 1)
     .run(config, 2026)?;
 
 assert_eq!(map.len(), 24 * 16);

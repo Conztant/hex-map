@@ -28,7 +28,7 @@ mod tests {
         let map = PipelineBuilder::new()
             .voronoi(4)
             .land_raise_sink(50, 2, 2)
-            .tectonic_plates(4, 2, 1, 1)
+            .tectonic_plates(4, 1, 2, 1, 1)
             .run(config, 7)
             .expect("pipeline should run");
 

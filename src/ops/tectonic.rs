@@ -9,6 +9,7 @@ use crate::util::rng::SeededRng;
 
 pub struct TectonicPlateOp {
     plate_count: usize,
+    border_width: usize,
     max_boundary_raise: i32,
     max_boundary_sink: i32,
     interior_jitter: i32,
@@ -17,12 +18,14 @@ pub struct TectonicPlateOp {
 impl TectonicPlateOp {
     pub fn new(
         plate_count: usize,
+        border_width: usize,
         max_boundary_raise: i32,
         max_boundary_sink: i32,
         interior_jitter: i32,
     ) -> Self {
         Self {
             plate_count,
+            border_width: border_width.max(1),
             max_boundary_raise: max_boundary_raise.max(0),
             max_boundary_sink: max_boundary_sink.max(0),
             interior_jitter: interior_jitter.max(0),
@@ -32,6 +35,20 @@ impl TectonicPlateOp {
     fn choose_centers(&self, coords: &mut [CubeCoord], rng: &mut SeededRng) -> Vec<CubeCoord> {
         rng.shuffle(coords);
         coords[..self.plate_count].to_vec()
+    }
+
+    fn scale_boundary_magnitude(&self, magnitude: i32, boundary_distance: i32) -> i32 {
+        if magnitude <= 0 {
+            return 0;
+        }
+
+        if boundary_distance <= 0 || boundary_distance as usize > self.border_width {
+            return 0;
+        }
+
+        let weight = (self.border_width - boundary_distance as usize + 1) as i32;
+        let scaled = magnitude * weight / self.border_width as i32;
+        scaled.max(1)
     }
 }
 
@@ -73,35 +90,47 @@ impl GeneratorOperation for TectonicPlateOp {
         }
 
         for (coord, current_plate) in &coord_plate_pairs {
-            let mut neighbor_plates: Vec<u32> = Vec::new();
+            let mut nearest_plates: Vec<u32> = Vec::new();
+            let mut nearest_distance = i32::MAX;
 
             for (other_coord, other_plate) in &coord_plate_pairs {
                 if current_plate == other_plate {
                     continue;
                 }
 
-                if map.wrapped_distance(*coord, *other_coord) == 1 {
-                    neighbor_plates.push(*other_plate);
+                let distance = map.wrapped_distance(*coord, *other_coord);
+
+                if distance < nearest_distance {
+                    nearest_distance = distance;
+                    nearest_plates.clear();
+                    nearest_plates.push(*other_plate);
+                } else if distance == nearest_distance {
+                    nearest_plates.push(*other_plate);
                 }
             }
 
+            nearest_plates.sort_unstable();
+            nearest_plates.dedup();
+
             let mut delta = 0;
 
-            if !neighbor_plates.is_empty() {
+            if !nearest_plates.is_empty() && nearest_distance as usize <= self.border_width {
                 let current_drift = *drift.get(current_plate).unwrap_or(&false);
-                let opposite_count = neighbor_plates
+                let opposite_count = nearest_plates
                     .iter()
                     .filter(|neighbor_plate| {
                         drift.get(neighbor_plate).copied().unwrap_or(false) != current_drift
                     })
                     .count();
 
-                if opposite_count * 2 >= neighbor_plates.len() {
+                if opposite_count * 2 >= nearest_plates.len() {
                     if self.max_boundary_raise > 0 {
-                        delta += rng.next_i32_inclusive(1, self.max_boundary_raise);
+                        let base = rng.next_i32_inclusive(1, self.max_boundary_raise);
+                        delta += self.scale_boundary_magnitude(base, nearest_distance);
                     }
                 } else if self.max_boundary_sink > 0 {
-                    delta -= rng.next_i32_inclusive(1, self.max_boundary_sink);
+                    let base = rng.next_i32_inclusive(1, self.max_boundary_sink);
+                    delta -= self.scale_boundary_magnitude(base, nearest_distance);
                 }
             } else if self.interior_jitter > 0 {
                 delta += rng.next_i32_inclusive(-self.interior_jitter, self.interior_jitter);

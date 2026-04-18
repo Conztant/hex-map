@@ -39,12 +39,14 @@ impl PipelineBuilder {
     pub fn tectonic_plates(
         mut self,
         plate_count: usize,
+        border_width: usize,
         max_boundary_raise: i32,
         max_boundary_sink: i32,
         interior_jitter: i32,
     ) -> Self {
         self.pipeline.add_operation(TectonicPlateOp::new(
             plate_count,
+            border_width,
             max_boundary_raise,
             max_boundary_sink,
             interior_jitter,
