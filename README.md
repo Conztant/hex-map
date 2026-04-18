@@ -33,6 +33,7 @@ let config = MapConfig::rectangular(
 let map = PipelineBuilder::new()
     .voronoi(12)
     .land_raise_sink(60, 4, 3)
+    .tectonic_plates(2, 2, 1)
     .run(config, 2026)?;
 
 assert_eq!(map.len(), 24 * 16);
@@ -42,6 +43,7 @@ assert_eq!(map.len(), 24 * 16);
 
 - `VoronoiPartitionOp`: partitions all active tiles into Voronoi regions (every tile receives a region id)
 - `LandRaiseSinkOp`: marks tiles as land/water and assigns elevation
+- `TectonicPlateOp`: applies deterministic boundary uplift/subduction and interior jitter by Voronoi plate
 
 ## Notes
 
