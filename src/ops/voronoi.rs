@@ -13,11 +13,6 @@ impl VoronoiPartitionOp {
     pub fn new(region_count: usize) -> Self {
         Self { region_count }
     }
-
-    fn choose_centers(&self, coords: &mut [CubeCoord], rng: &mut SeededRng) -> Vec<CubeCoord> {
-        rng.shuffle(coords);
-        coords[..self.region_count].to_vec()
-    }
 }
 
 impl GeneratorOperation for VoronoiPartitionOp {
@@ -32,23 +27,12 @@ impl GeneratorOperation for VoronoiPartitionOp {
             return Err(HexMapError::InvalidVoronoiRegionCount);
         }
 
-        let centers = self.choose_centers(&mut coords, rng);
-        let all_coords: Vec<CubeCoord> = map.iter().map(|(coord, _)| coord).collect();
+        let centers = super::choose_centers(&mut coords, self.region_count, rng);
 
-        for coord in all_coords {
-            let mut best_id = 0usize;
-            let mut best_distance = i32::MAX;
-
-            for (idx, center) in centers.iter().enumerate() {
-                let distance = map.wrapped_distance(coord, *center);
-                if distance < best_distance || (distance == best_distance && idx < best_id) {
-                    best_distance = distance;
-                    best_id = idx;
-                }
-            }
-
+        for &coord in &coords {
+            let id = super::nearest_center_id(coord, &centers, map) as u32;
             if let Some(tile) = map.get_mut(coord) {
-                tile.cell_id = Some(best_id as u32);
+                tile.cell_id = Some(id);
             }
         }
 

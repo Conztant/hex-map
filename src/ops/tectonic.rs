@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use hex_grid::{CubeCoord, HexGrid};
+use hex_grid::{CubeCoord, HexGrid, Orientation, WrappingMode};
 
 use crate::core::error::HexMapError;
 use crate::core::tile::{TerrainKind, TileData};
@@ -32,11 +32,6 @@ impl TectonicPlateOp {
         }
     }
 
-    fn choose_centers(&self, coords: &mut [CubeCoord], rng: &mut SeededRng) -> Vec<CubeCoord> {
-        rng.shuffle(coords);
-        coords[..self.plate_count].to_vec()
-    }
-
     fn scale_boundary_magnitude(&self, magnitude: i32, boundary_distance: i32) -> i32 {
         if magnitude <= 0 {
             return 0;
@@ -64,63 +59,102 @@ impl GeneratorOperation for TectonicPlateOp {
             return Err(HexMapError::InvalidTectonicPlateCount);
         }
 
-        let centers = self.choose_centers(&mut coords, rng);
-        let all_coords: Vec<CubeCoord> = map.iter().map(|(coord, _)| coord).collect();
-        let coord_plate_pairs: Vec<(CubeCoord, u32)> = all_coords
+        let centers = super::choose_centers(&mut coords, self.plate_count, rng);
+
+        // Assign each tile to its nearest plate center.
+        let coord_to_plate: HashMap<CubeCoord, u32> = coords
             .iter()
-            .map(|coord| {
-                let mut best_id = 0usize;
-                let mut best_distance = i32::MAX;
-
-                for (idx, center) in centers.iter().enumerate() {
-                    let distance = map.wrapped_distance(*coord, *center);
-                    if distance < best_distance || (distance == best_distance && idx < best_id) {
-                        best_distance = distance;
-                        best_id = idx;
-                    }
-                }
-
-                (*coord, best_id as u32)
+            .map(|&coord| {
+                let id = super::nearest_center_id(coord, &centers, map) as u32;
+                (coord, id)
             })
             .collect();
 
-        let mut drift: HashMap<u32, bool> = HashMap::new();
-        for plate_id in 0..self.plate_count {
-            drift.insert(plate_id as u32, rng.next_bool_ratio(1, 2));
-        }
+        // Roll drift direction once per plate (deterministic order).
+        let drift: Vec<bool> = (0..self.plate_count)
+            .map(|_| rng.next_bool_ratio(1, 2))
+            .collect();
 
-        for (coord, current_plate) in &coord_plate_pairs {
-            let mut nearest_plates: Vec<u32> = Vec::new();
+        // `valid_neighbors` on wrapped maps may return non-canonical (out-of-bounds) coords.
+        // Normalize them to match the canonical keys stored in `coord_to_plate`.
+        let (origin_q, origin_r) = coords
+            .iter()
+            .fold((i32::MAX, i32::MAX), |(mq, mr), c| (mq.min(c.q), mr.min(c.r)));
+        let (width, height) = map.dimensions();
+        let wrapping_mode = map.wrapping_mode();
+        let orientation = map.orientation();
+        let canonical = move |coord: CubeCoord| -> CubeCoord {
+            match wrapping_mode {
+                Some(WrappingMode::WrapQ) => CubeCoord::from_axial(
+                    origin_q + (coord.q - origin_q).rem_euclid(width),
+                    coord.r,
+                ),
+                Some(WrappingMode::WrapR) => CubeCoord::from_axial(
+                    coord.q,
+                    origin_r + (coord.r - origin_r).rem_euclid(height),
+                ),
+                Some(WrappingMode::Cylindrical) => match orientation {
+                    Orientation::FlatTop => CubeCoord::from_axial(
+                        origin_q + (coord.q - origin_q).rem_euclid(width),
+                        coord.r,
+                    ),
+                    Orientation::PointyTop => CubeCoord::from_axial(
+                        coord.q,
+                        origin_r + (coord.r - origin_r).rem_euclid(height),
+                    ),
+                },
+                Some(WrappingMode::Toroidal) => CubeCoord::from_axial(
+                    origin_q + (coord.q - origin_q).rem_euclid(width),
+                    origin_r + (coord.r - origin_r).rem_euclid(height),
+                ),
+                None => coord,
+            }
+        };
+
+        for &coord in &coords {
+            let current_plate = coord_to_plate[&coord];
+
+            // BFS outward from `coord` through same-plate tiles up to `border_width` steps,
+            // looking for the nearest different-plate tile.  This is O(border_width²) per tile
+            // instead of the O(n) naive scan, giving O(n·border_width²) total.
+            let mut frontier = vec![coord];
+            let mut visited: HashSet<CubeCoord> = HashSet::from([coord]);
             let mut nearest_distance = i32::MAX;
+            let mut nearest_plates: Vec<u32> = Vec::new();
 
-            for (other_coord, other_plate) in &coord_plate_pairs {
-                if current_plate == other_plate {
-                    continue;
+            'bfs: for distance in 1..=(self.border_width as i32) {
+                let mut next_frontier = Vec::new();
+                for c in &frontier {
+                    for neighbor_raw in map.valid_neighbors(*c) {
+                        let neighbor = canonical(neighbor_raw);
+                        if visited.insert(neighbor) {
+                            let plate = coord_to_plate[&neighbor];
+                            if plate != current_plate {
+                                nearest_distance = distance;
+                                if !nearest_plates.contains(&plate) {
+                                    nearest_plates.push(plate);
+                                }
+                            } else {
+                                next_frontier.push(neighbor);
+                            }
+                        }
+                    }
                 }
-
-                let distance = map.wrapped_distance(*coord, *other_coord);
-
-                if distance < nearest_distance {
-                    nearest_distance = distance;
-                    nearest_plates.clear();
-                    nearest_plates.push(*other_plate);
-                } else if distance == nearest_distance {
-                    nearest_plates.push(*other_plate);
+                if nearest_distance != i32::MAX {
+                    break 'bfs;
                 }
+                frontier = next_frontier;
             }
 
             nearest_plates.sort_unstable();
-            nearest_plates.dedup();
 
             let mut delta = 0;
 
-            if !nearest_plates.is_empty() && nearest_distance as usize <= self.border_width {
-                let current_drift = *drift.get(current_plate).unwrap_or(&false);
+            if !nearest_plates.is_empty() {
+                let current_drift = drift[current_plate as usize];
                 let opposite_count = nearest_plates
                     .iter()
-                    .filter(|neighbor_plate| {
-                        drift.get(neighbor_plate).copied().unwrap_or(false) != current_drift
-                    })
+                    .filter(|&&p| drift[p as usize] != current_drift)
                     .count();
 
                 if opposite_count * 2 >= nearest_plates.len() {
@@ -136,7 +170,7 @@ impl GeneratorOperation for TectonicPlateOp {
                 delta += rng.next_i32_inclusive(-self.interior_jitter, self.interior_jitter);
             }
 
-            if let Some(tile) = map.get_mut(*coord) {
+            if let Some(tile) = map.get_mut(coord) {
                 tile.elevation += delta;
                 tile.terrain_kind = if tile.elevation > 0 {
                     TerrainKind::Land
